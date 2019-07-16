@@ -1,0 +1,464 @@
+# Digits recognition on PNG images. R code
+
+1. Added utility functions
+2. Introspection on dim=2. Extra layers on tensor
+3. Converting code from Python to R
+
+## Objectives
+1. Read PNG images instead of MNIST standard dataset.
+2. Save the model
+3. Read an unseen digit as PNG file using the saved model
+4. Predict the digit and calculate accuracy
+
+```{r, echo=FALSE}
+# Force using local Python environment
+if (.Platform$OS.type == "unix") {
+  reticulate::use_python(python = file.path(script_path, "/..", "conda", "bin",
+                                            "python3"), require = TRUE)
+} else if (.Platform$OS.type == "windows") {
+  reticulate::use_python(python = file.path(script_path, "..", "conda"),
+                         require = TRUE)
+}
+# Find the PyQt libraries under Library/plugins/platforms
+qt_plugins <- file.path(find_rsuite_root(), "conda", "Library", "plugins",
+                        "platforms")
+reticulate::py_run_string("
+import os;
+os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = r.qt_plugins")
+```
+
+
+## Load PyTorch libraries
+
+```{r}
+library(reticulate)
+library(testthat)
+
+torch       <- import("torch")
+torchvision <- import("torchvision")
+nn          <- import("torch.nn")
+transforms  <- import("torchvision.transforms")
+dsets       <- import("torchvision.datasets")
+builtins    <- import_builtins()
+np          <- import("numpy")
+```
+
+
+## Dataset iteration batch settings
+
+```{r}
+# batch size for datasets
+batch_size_train = 100L    # this will be used during training
+batch_size_test  = 1000L
+
+# folders where the images are located
+train_data_path = '~/mnist_png_full/training/'
+test_data_path  = '~/mnist_png_full/testing/'
+```
+
+
+## Read datasets
+This is not your typical MNIST digit dataset. The standard dataset is in IDX format where you cannot see the image directly from your browser. I prefer to use PNG images. That's why we have to specify the `train_data_path` and the `test_data_path`. The size of the PNG dataset is 19.3 MB which includes the 70,000 samples for training and testing.
+
+First we will start by reading the images as raw as they come. Later, after getting the first accuracy numbers, we will try with normalization and see how much contributes in improving the accuracy.
+
+```{r}
+# read the datasets without normalization
+train_dataset = torchvision$datasets$ImageFolder(root = train_data_path, 
+    transform = torchvision$transforms$ToTensor()
+)
+
+test_dataset = torchvision$datasets$ImageFolder(root = test_data_path, 
+    transform = torchvision$transforms$ToTensor()
+)
+
+# number of images for training and testing
+cat(py_len(train_dataset), py_len(test_dataset), "\n")
+# another way of getting the number of elements in the training dataset
+train_dataset$`__len__`()
+
+class(train_dataset)        # <class 'torchvision.datasets.folder.ImageFolder'>
+
+# in Python the object train_dataset[0] is a tuple
+# In R, this will produce an error
+expect_error(class(train_dataset[0]))      # <class 'tuple'>
+
+# how does the train_dataset object presents itself
+train_dataset
+# Dataset ImageFolder
+#     Number of datapoints: 60000
+#     Root location: /home/msfz751/mnist_png_full/training/
+```
+
+## Read image and label for a data point
+The Python object is a tuple with two elements but in R returns as a list of two elements: 
+* [[1]] a tensor of size 3x28x28 rerpresenting the image, and
+* [[2]] an integer, representing the label for the digit
+
+```{r}
+# retrieve a random data point from the dataset
+random <- import("random")
+
+# a random number from 0 through 59999
+i_rand = random$randrange(0, py_len(train_dataset)-1)
+i_rand
+
+# the Python object is a tuple with two elements
+# But in R returns as a list of two elements: 
+#     [[1]] a tensor, and [[2]] an integer
+dataset_object = py_get_item(train_dataset, i_rand) 
+dataset_object
+```
+
+```{r}
+# class and length of the dataset_object
+class(dataset_object)
+length(dataset_object)
+
+# decomposing the dataset_object
+image <- dataset_object[[1]]
+label <- dataset_object[[2]]
+```
+
+The size of the image tensor is `torch.Size([3, 28, 28])` but it should really be `torch.Size([1, 28, 28])`.
+```{r}
+# this is just one of the 60,000 image-label objects
+image$size()  # torch.Size([3, 28, 28])
+```
+
+
+```{r}
+# the object label is not a tensor but rather an integer
+# applying the size() function will throw an error.
+builtins$isinstance(label, builtins$int)
+expect_error(label$size())
+
+# length of the integer as a string, same as number of digits
+cat(sprintf("Length of label: %d", builtins$len(builtins$str(label))))
+```
+
+### Introspection of the train_dataset
+
+```{r}
+cat(sprintf("The object train_dataset is not directly accesible from R. 
+Using the `py_get_item()` function we can reach any of its %d elements of the 
+%s. Each of these objects has %d members.\n", py_len(train_dataset), builtins$type(py_get_item(train_dataset, 0L)), 
+builtins$len(py_get_item(train_dataset, 0L))
+))
+
+cat(sprintf("\tThe first member is of the %s, a tensor for the image.\n", 
+            builtins$type(py_get_item(train_dataset, 0L)[[1]])))
+
+cat(sprintf("\tThe second member is of the %s, an integer for the label.",
+            builtins$type(py_get_item(train_dataset, 0L)[[2]])))
+```
+
+Each of the images read from the PNG files is loaded into a tensor of size 3x28x28.
+
+```{r}
+# check size of first and last data point tensor, image part
+py_get_item(train_dataset, 0L)[[1]]$size()      # first object
+py_get_item(train_dataset, 59999L)[[1]]$size()  # last object
+image$size()
+# it is torch.Size([3, 28, 28]) but it should be 1, 28, 28
+# we will take only one slice of dim=1
+```
+
+### Size of tensor on dim=2 of train_dataset
+The tensors on dim=2 seem to be identical. We will confirm in the following chunk:
+
+
+### Visualizing the images from the tensor
+
+```{r}
+# retrieve a random data point from the dataset
+random <- import("random")
+
+# a random number from 0 through 59999
+i_rand = random$randrange(0, py_len(train_dataset)-1)
+i_rand
+
+# the Python object is a tuple with two elements
+# But in R returns as a list of two elements: 
+#     [[1]] a tensor, and [[2]] an integer
+dataset_object = py_get_item(train_dataset, i_rand) 
+
+# decomposing the dataset_object
+image <- dataset_object[[1]]
+label <- dataset_object[[2]]
+
+image[0]$size()
+```
+
+```{r}
+rotate <- function(x) t(apply(x, 2, rev))   # function to rotate the matrix
+
+# convert to numpy array and reshape
+img_np_rs = np$reshape(image[0]$numpy(), c(28L, 28L))
+image(rotate(img_np_rs))
+title(label)  # the label for the corresponding tensor
+```
+
+### Retrieve a second data point
+
+```{r}
+# second random data point
+i_rand = random$randrange(0, py_len(train_dataset)-1)   # get a random data point
+
+dataset_object = py_get_item(train_dataset, i_rand)    # read the tuple
+image <- dataset_object[[1]]
+label <- dataset_object[[2]]
+
+# convert to numpy array and reshape
+img_np_rs = np$reshape(image[0]$numpy(), c(28L, 28L))
+image(rotate(img_np_rs))
+title(label)  # the label for the corresponding tensor
+```
+
+## Reduce the number of layers for dim=1 in the image
+
+```{r}
+# this class to be used to get rid of two duplicate layers in the image
+main <- py_run_string('
+class PickLayerTransform:
+    def __init__(self, layer):
+        # self.img_ds = img
+        self.layer = layer
+        if self.layer < 0: raise RuntimeError("Layer index {} cannot be negative ".format(self.layer))
+        
+    def __call__(self, img):
+        if (self.layer > len(img)-1): raise RuntimeError("Layer index {} incompatible with dimension size {}".format(self.layer, len(img)))
+        return img[(self.layer-1):self.layer, :, :]
+')
+
+PickLayerTransform <- main$PickLayerTransform
+
+# trying to resize tensor to [1, 28, 28]
+train_dataset = torchvision$datasets$ImageFolder(root = train_data_path,
+    transform = torchvision$transforms$Compose(c(
+              transforms$ToTensor(),
+              PickLayerTransform(1L)
+    )))
+
+test_dataset = torchvision$datasets$ImageFolder(root = test_data_path,
+    transform = torchvision$transforms$Compose(c(
+              transforms$ToTensor(),
+              PickLayerTransform(1L)
+    )))
+```
+
+```{r}
+# check size of a data point tensor, image part
+# train_dataset[0][0].size()       # first object
+# train_dataset[59999][0].size()   # last object
+first <- 0L
+last <- 59999L
+cat(sprintf("New dataset image size:\n     %d of %d: %s.\n %d of %d: %s.\n", 
+  first+1, last+1, py_get_item(train_dataset, first)[[1]]$size(),
+  last+1,last+1, py_get_item(train_dataset, last)[[1]]$size()
+))
+
+# this image generated before eliminating 2 extra layers
+cat(sprintf("Old dataset image size:\n %s",
+            image$size()
+))
+```
+
+> It  was torch.Size([3, 28, 28]) but it should have been torch.Size([1, 28, 28]). 
+
+### Show a random image
+
+```{r}
+i_rand = random$randrange(0, py_len(train_dataset)-1)   # get a random data point
+
+dataset_object <- py_get_item(train_dataset, i_rand)    # read the list
+
+# extract image and label from the list
+image <- dataset_object[[1]]
+label <- dataset_object[[2]]
+
+# convert to numpy array and reshape
+# we don't need to specify the layer index anymore
+# we can use this form:
+  # img_np_rs = img[:, :, :].numpy().reshape(28, 28) in Python
+  # or this in R:
+img_np_rs = np$reshape(image$numpy(), c(28L, 28L))
+image(rotate(img_np_rs))
+title(label)  # the label for the corresponding tensor
+```
+
+### Apply `DataLoader` and set the batch size
+
+To prevent losing features by using a simple for loop to iterate over the data. In particular, we are missing out on:
+
+    Batching the data
+    Shuffling the data
+    Load the data in parallel using multiprocessing workers.
+
+
+```{r}
+# load the dataset of images
+train_loader = torch$utils$data$DataLoader(
+        train_dataset,
+        batch_size=batch_size_train,
+        shuffle=TRUE
+    )
+
+# load the dataset of images
+test_loader = torch$utils$data$DataLoader(
+        test_dataset,
+        batch_size=batch_size_test,
+        shuffle=TRUE
+    )
+
+cat(py_len(train_loader), py_len(test_loader))
+```
+
+
+```{r}
+# Confirm that the dataset loaders are iterable objects
+collections <- import("collections")
+
+builtins$isinstance(train_loader, collections$Iterable)
+builtins$isinstance(test_loader, collections$Iterable)
+```
+
+## Build the model
+
+```{r}
+# Build the model
+# Same as linear regression! 
+main <- py_run_string("
+import torch.nn as nn
+
+class LogisticRegressionModel(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super(LogisticRegressionModel, self).__init__()
+        self.linear = nn.Linear(input_dim, output_dim)
+
+    def forward(self, x):
+        out = self.linear(x)
+        return out
+")
+
+LogisticRegressionModel <- main$LogisticRegressionModel
+```
+
+
+
+```{r}
+# feeding the model with 28x28 images
+input_dim = 28L*28L
+
+# classify digits 0-9 a total of 10 classes,
+output_dim = 10L
+
+# instantiate model
+model = LogisticRegressionModel(input_dim, output_dim)
+model
+```
+
+```{r}
+### Instantiate Cross Entropy Loss class
+# need Cross Entropy Loss to calculate loss before we backpropagation
+criterion = nn$CrossEntropyLoss()  
+
+# calculate parameters' gradients and update
+learning_rate = 0.001
+
+### Instantiate Optimizer class
+optimizer = torch$optim$SGD(model$parameters(), lr=learning_rate)  
+optimizer
+```
+
+```{r}
+# Type of parameter object
+print(model$parameters())
+model_parameters <- builtins$list(model$parameters())
+
+# Length of parameters
+print(builtins$len(model_parameters))
+
+# FC 1 Parameters 
+print(builtins$list(model_parameters)[[1]]$size())
+
+# FC 1 Bias Parameters
+print(builtins$list(model_parameters)[[2]]$size())
+```
+
+We arbitrarily set 3000 iterations here which means the model would update 3000 times. 
+
+```{r}
+n_iters = 3000L
+```
+
+One epoch consists of 60,000 / 100 = 600 iterations. Because we would like to go through 3000 iterations, this implies we would have 3000 / 600 = 5 epochs as each epoch has 600 iterations. 
+
+```{r}
+num_epochs = n_iters / (py_len(train_dataset) / batch_size_train)
+num_epochs = as.integer(num_epochs)
+num_epochs
+```
+
+## Training the model
+We have three loops: 
+1. A loop for the epochs
+2, A loop for the training dataset
+3. A loop that evaluates accuracy on the test dataset after each epoch
+
+```{r, r_training_model}
+# train the model
+iter <- 0L
+for (epoch in 1:num_epochs) {
+    iter_train_dataset <- builtins$enumerate(train_loader) # reset iterator
+    for (train_obj in iterate(iter_train_dataset)) {
+        # extract images, labels
+        images <- train_obj[[2]][[1]]
+        labels <- train_obj[[2]][[2]]
+        # Load images as Variable
+        images = images$view(-1L, 28L*28L)$requires_grad_()
+        labels = labels
+        # Clear gradients w.r.t. parameters
+        optimizer$zero_grad()
+        # Forward pass to get output/logits
+        outputs = model(images)
+        # Calculate Loss: softmax --> cross entropy loss
+        loss = criterion(outputs, labels)
+        # Getting gradients w.r.t. parameters
+        loss$backward()
+        # Updating parameters
+        optimizer$step()
+        iter = iter + 1
+        if (iter %% 500 == 0) {
+            # Calculate Accuracy for each epoch        
+            correct <- 0
+            total <- 0
+            # Iterate through test dataset
+            iter_test_dataset <- builtins$enumerate(test_loader) # reset iterator
+            for (test_obj in iterate(iter_test_dataset)) {
+                # Load images to a Torch Variable
+                images <- test_obj[[2]][[1]]
+                labels <- test_obj[[2]][[2]]
+                images <- images$view(-1L, 28L*28L)$requires_grad_()
+                # Forward pass only to get logits/output
+                outputs = model(images)
+                # Get predictions from the maximum value
+                .predicted = torch$max(outputs$data, 1L)
+                predicted <- .predicted[1L]
+                # Total number of labels
+                total = total + labels$size(0L)
+                # Total correct predictions
+                correct = correct + sum((predicted$numpy() == labels$numpy()))
+            }
+            accuracy = 100 * correct / total
+            # Print Loss
+            cat(sprintf('Iteration: %5d. Loss: %f. Accuracy: %8.2f \n', 
+                  iter, loss$item(), accuracy))
+        }
+    }
+}
+```
+
+> This is a modified version of the original article.
+
+Source:  https://www.deeplearningwizard.com/deep_learning/practical_pytorch/pytorch_logistic_regression/
