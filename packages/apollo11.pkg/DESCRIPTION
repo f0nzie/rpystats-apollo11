@@ -2,9 +2,17 @@ Package: apollo11.pkg
 Type: Package
 Title: What the package does (short line)
 Version: 0.1
-Date: 2019-07-16
-Author: ptech
+Date: 2019-07-15
+Author: Alfonso R. Reyes
 Maintainer: Who to complain to <yourfault@somewhere.net>
 Description: More about what it does (maybe more than one line)
 License: What license is it under?
-Imports: logging
+Imports: logging,  
+  abind,
+  reticulate,
+  testthat,
+  dplyr,
+  data.table,
+  ggplot2
+SystemRequirements: conda (python=3.6.6 pytorch-cpu torchvision-cpu matplotlib 
+    pandas -c pytorch)
