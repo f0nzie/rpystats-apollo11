@@ -1,0 +1,6 @@
+RSuiteVersion: 0.37.253
+RVersion: 3.6
+Project: rpystats-apollo11
+Repositories: MRAN[2019-07-16]
+Artifacts: config_templ.txt
+ZipVersion: 0.1
