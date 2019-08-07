@@ -10,18 +10,46 @@
 3. Read an unseen digit as PNG file using the saved model
 4. Predict the digit and calculate accuracy
 
+```{r, rsuite_setup}
+# Detect proper script_path (you cannot use args yet as they are build with tools in set_env.r)
+script_path <- (function() {
+  args <- commandArgs(trailingOnly = FALSE)
+  script_path <- dirname(sub("--file=", "", args[grep("--file=", args)]))
+  if (!length(script_path)) {
+    return(".")
+  }
+  if (grepl("darwin", R.version$os)) {
+    script_path <- gsub("~\\+~", " ", script_path) # on MacOS ~+~ in path denotes whitespace
+  }
+  return(normalizePath(script_path))
+})()
+
+# Setting .libPaths() to point to libs folder
+source(file.path(script_path, "set_env.R"), chdir = T)
+
+config <- load_config()
+args <- args_parser()
+```
+
+```{r, prj_paths}
+proj_root_path <- file.path(script_path, "..", "..")
+conda_path <- file.path(proj_root_path, "conda")
+data_path <- file.path(proj_root_path, "data")
+```
+
+
 ```{r, echo=FALSE}
 # Force using local Python environment
 if (.Platform$OS.type == "unix") {
-  reticulate::use_python(python = file.path(script_path, "/..", "conda", "bin",
+  reticulate::use_python(python = file.path(conda_path, "bin",
                                             "python3"), require = TRUE)
 } else if (.Platform$OS.type == "windows") {
-  reticulate::use_python(python = file.path(script_path, "..", "conda"),
+  reticulate::use_python(python = conda_path,
                          require = TRUE)
 }
 # Find the PyQt libraries under Library/plugins/platforms
-qt_plugins <- file.path(find_rsuite_root(), "conda", "Library", "plugins",
-                        "platforms")
+qt_plugins <- file.path(conda_path,
+                        "Library", "plugins", "platforms")
 reticulate::py_run_string("
 import os;
 os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = r.qt_plugins")
@@ -52,8 +80,8 @@ batch_size_train = 100L    # this will be used during training
 batch_size_test  = 1000L
 
 # folders where the images are located
-train_data_path = '~/mnist_png_full/training/'
-test_data_path  = '~/mnist_png_full/testing/'
+train_data_path = sprintf("%s/mnist_png_full/training/", data_path)
+test_data_path  = sprintf("%s/mnist_png_full/testing/", data_path)
 ```
 
 
@@ -73,11 +101,11 @@ test_dataset = torchvision$datasets$ImageFolder(root = test_data_path,
 )
 
 # number of images for training and testing
-cat(py_len(train_dataset), py_len(test_dataset), "\n")
+loginfo("%s %s", py_len(train_dataset), py_len(test_dataset))
 # another way of getting the number of elements in the training dataset
 train_dataset$`__len__`()
 
-class(train_dataset)        # <class 'torchvision.datasets.folder.ImageFolder'>
+loginfo("%s", class(train_dataset))       # <class 'torchvision.datasets.folder.ImageFolder'>
 
 # in Python the object train_dataset[0] is a tuple
 # In R, this will produce an error
@@ -134,23 +162,23 @@ builtins$isinstance(label, builtins$int)
 expect_error(label$size())
 
 # length of the integer as a string, same as number of digits
-cat(sprintf("Length of label: %d", builtins$len(builtins$str(label))))
+loginfo("Length of label: %d", builtins$len(builtins$str(label)))
 ```
 
 ### Introspection of the train_dataset
 
 ```{r}
-cat(sprintf("The object train_dataset is not directly accesible from R. 
+loginfo("The object train_dataset is not directly accesible from R. 
 Using the `py_get_item()` function we can reach any of its %d elements of the 
 %s. Each of these objects has %d members.\n", py_len(train_dataset), builtins$type(py_get_item(train_dataset, 0L)), 
 builtins$len(py_get_item(train_dataset, 0L))
-))
+)
 
-cat(sprintf("\tThe first member is of the %s, a tensor for the image.\n", 
-            builtins$type(py_get_item(train_dataset, 0L)[[1]])))
+loginfo("\tThe first member is of the %s, a tensor for the image.\n", 
+            builtins$type(py_get_item(train_dataset, 0L)[[1]]))
 
-cat(sprintf("\tThe second member is of the %s, an integer for the label.",
-            builtins$type(py_get_item(train_dataset, 0L)[[2]])))
+loginfo("\tThe second member is of the %s, an integer for the label.",
+            builtins$type(py_get_item(train_dataset, 0L)[[2]]))
 ```
 
 Each of the images read from the PNG files is loaded into a tensor of size 3x28x28.
@@ -253,15 +281,15 @@ test_dataset = torchvision$datasets$ImageFolder(root = test_data_path,
 # train_dataset[59999][0].size()   # last object
 first <- 0L
 last <- 59999L
-cat(sprintf("New dataset image size:\n     %d of %d: %s.\n %d of %d: %s.\n", 
+loginfo("New dataset image size:\n     %d of %d: %s.\n %d of %d: %s.\n", 
   first+1, last+1, py_get_item(train_dataset, first)[[1]]$size(),
   last+1,last+1, py_get_item(train_dataset, last)[[1]]$size()
-))
+)
 
 # this image generated before eliminating 2 extra layers
-cat(sprintf("Old dataset image size:\n %s",
+loginfo("Old dataset image size:\n %s",
             image$size()
-))
+)
 ```
 
 > It  was torch.Size([3, 28, 28]) but it should have been torch.Size([1, 28, 28]). 
@@ -311,7 +339,7 @@ test_loader = torch$utils$data$DataLoader(
         shuffle=TRUE
     )
 
-cat(py_len(train_loader), py_len(test_loader))
+loginfo("%s %s", py_len(train_loader), py_len(test_loader))
 ```
 
 
@@ -373,17 +401,17 @@ optimizer
 
 ```{r}
 # Type of parameter object
-print(model$parameters())
+loginfo("%s", model$parameters())
 model_parameters <- builtins$list(model$parameters())
 
 # Length of parameters
-print(builtins$len(model_parameters))
+loginfo("%s", builtins$len(model_parameters))
 
 # FC 1 Parameters 
-print(builtins$list(model_parameters)[[1]]$size())
+loginfo("%s", builtins$list(model_parameters)[[1]]$size())
 
 # FC 1 Bias Parameters
-print(builtins$list(model_parameters)[[2]]$size())
+loginfo("%s", builtins$list(model_parameters)[[2]]$size())
 ```
 
 We arbitrarily set 3000 iterations here which means the model would update 3000 times. 
@@ -452,8 +480,8 @@ for (epoch in 1:num_epochs) {
             }
             accuracy = 100 * correct / total
             # Print Loss
-            cat(sprintf('Iteration: %5d. Loss: %f. Accuracy: %8.2f \n', 
-                  iter, loss$item(), accuracy))
+            loginfo('Iteration: %5d. Loss: %f. Accuracy: %8.2f \n', 
+                  iter, loss$item(), accuracy)
         }
     }
 }
