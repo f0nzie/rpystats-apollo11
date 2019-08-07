@@ -15,18 +15,46 @@ Read PNG images instead of MNIST standard dataset.
 
 ## Load PyTorch libraries
 
+
+```{r, rsuite_setup}
+# Detect proper script_path (you cannot use args yet as they are build with tools in set_env.r)
+script_path <- (function() {
+  args <- commandArgs(trailingOnly = FALSE)
+  script_path <- dirname(sub("--file=", "", args[grep("--file=", args)]))
+  if (!length(script_path)) {
+    return(".")
+  }
+  if (grepl("darwin", R.version$os)) {
+    script_path <- gsub("~\\+~", " ", script_path) # on MacOS ~+~ in path denotes whitespace
+  }
+  return(normalizePath(script_path))
+})()
+
+# Setting .libPaths() to point to libs folder
+source(file.path(script_path, "set_env.R"), chdir = T)
+
+config <- load_config()
+args <- args_parser()
+```
+
+```{r, prj_paths}
+proj_root_path <- file.path(script_path, "..", "..")
+conda_path <- file.path(proj_root_path, "conda")
+data_path <- file.path(proj_root_path, "data")
+```
+
 ```{r, echo=FALSE}
 # Force using local Python environment
 if (.Platform$OS.type == "unix") {
-  reticulate::use_python(python = file.path(script_path, "/..", "conda", "bin",
+  reticulate::use_python(python = file.path(conda_path, "bin",
                                             "python3"), require = TRUE)
 } else if (.Platform$OS.type == "windows") {
-  reticulate::use_python(python = file.path(script_path, "..", "conda"),
+  reticulate::use_python(python = conda_path,
                          require = TRUE)
 }
 # Find the PyQt libraries under Library/plugins/platforms
-qt_plugins <- file.path(find_rsuite_root(), "conda", "Library", "plugins",
-                        "platforms")
+qt_plugins <- file.path(conda_path,
+                        "Library", "plugins", "platforms")
 reticulate::py_run_string("
 import os;
 os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = r.qt_plugins")
@@ -49,8 +77,8 @@ batch_size_train = 100
 batch_size_test  = 1000
 
 # folders where te images are located
-train_data_path = '~/mnist_png_full/training/'
-test_data_path  = '~/mnist_png_full/testing/'
+train_data_path = r.data_path + '/mnist_png_full/training/'
+test_data_path  = r.data_path + '/mnist_png_full/testing/'
 ```
 
 

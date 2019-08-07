@@ -1,11 +1,8 @@
-# find_rsuite_root <- function(key = "PARAMETERS")  rprojroot::find_root(key)
-
-ace_rsuite <- find_rsuite_root()
-lib_path  <- file.path(ace_rsuite, "libs")
-sbox_path <- file.path(ace_rsuite, "sbox")
+lib_path <- file.path("..", "libs")
+sbox_path <- file.path("..", "sbox")
 if (!file.exists(lib_path)) {
-  lib_path <- file.path(find_rsuite_root(), "deployment", "libs")
-  sbox_path <- file.path(find_rsuite_root(), "deployment", "sbox")
+  lib_path <- file.path("..", "deployment", "libs")
+  sbox_path <- file.path("..", "deployment", "sbox")
 }
 
 if (!dir.exists(sbox_path)) {
@@ -21,7 +18,7 @@ logging::addHandler(logging::writeToConsole, level = "FINEST")
 
 log_fpath <- (function() {
   log_file <- gsub("-", "_", sprintf("%s.log", Sys.Date()))
-  log_dir <- normalizePath(file.path(find_rsuite_root(), "logs"))
+  log_dir <- normalizePath(file.path("..", "logs"))
   fpath <- file.path(log_dir, log_file)
   if (file.exists(fpath) && file.access(fpath, 2) == -1) {
     fpath <- paste0(fpath, ".", Sys.info()[["user"]])
@@ -29,7 +26,7 @@ log_fpath <- (function() {
   return(fpath)
 })()
 
-log_dir <- normalizePath(file.path(find_rsuite_root(), "logs"))
+log_dir <- normalizePath(file.path("..", "logs"))
 if (dir.exists(log_dir)) {
   logging::addHandler(logging::writeToFile, level = "FINEST", file = log_fpath)
 }
@@ -67,7 +64,9 @@ load_config <- function() {
 
   config <- read.dcf(config_file)
   if ("LogLevel" %in% colnames(config)) {
-    logging::setLevel(config[, "LogLevel"])
+    for (hname in names(logging::getLogger()[["handlers"]])) {
+      logging::setLevel(config[, "LogLevel"], logging::getHandler(hname))
+    }
   }
 
   config_lst <- as.list(config)
@@ -76,11 +75,14 @@ load_config <- function() {
   return(config_lst)
 }
 
-# customized folders
-
-folder_exists <- function(folder) {
-  if (!dir.exists(folder)) {
-    dir.create(folder, recursive = T)
+assert <- function(cond, fail_msg = NULL, ...) {
+  if (!cond) {
+    if (is.null(fail_msg) || missing(fail_msg)) {
+      fail_msg <- sprintf("Condition failed: %s", deparse(substitute(cond), width.cutoff = 30L))
+    } else {
+      fail_msg <- sprintf(fail_msg, ...)
+    }
+    stop(fail_msg, call. = FALSE)
   }
-  return(folder)
+  invisible()
 }
